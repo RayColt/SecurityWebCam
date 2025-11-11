@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="MySecTrackApp.cpp">
+    <ClCompile Include="MySecCamcppDEV.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
