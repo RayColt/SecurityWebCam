@@ -287,7 +287,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         break;
     }
-    case WM_TIMER: {
+   /* case WM_TIMER: {
         if (wParam == ID_TIMER_PREVIEW && g_running) {
             cv::Mat frame;
             if (!g_cap.read(frame) || frame.empty()) break;
@@ -314,7 +314,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (bestArea > 0) {
                     cv::Rect2d r2d(bestRect.x, bestRect.y, bestRect.width, bestRect.height);
                     auto t = makeTracker();
-                    if (!t) { /* no tracker available */ }
+                    if (!t) { // no tracker available  }
                     else {
                         bool ok = true;//TODO check init return
                         t->init(frame, r2d);
@@ -327,8 +327,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                 }
             }
-
-            /*/ update tracker if running
+            // comment this if block
+            // update tracker if running
             if (g_tracking && g_tracker) {
                 //cv::Rect2d newbox;
                 cv::Rect newbox;
@@ -340,7 +340,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 else {
                     g_bbox = newbox;
                 }
-            }*/
+            }
             if (g_tracking && g_tracker) {
                 // 1) Call update using integer rect (matches your tracking.hpp)
                 cv::Rect bboxInt;
@@ -416,9 +416,234 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     cv::imwrite(cropfn, crop);
                 }
             }
+            // request repaint of preview
+            InvalidateRect(g_hwndMain ? g_hwndMain : hwnd, NULL, FALSE);
+            return 0;
         }
         break;
+    }*/
+case WM_TIMER: {
+    if (wParam == ID_TIMER_PREVIEW && g_running) {
+        cv::Mat frame;
+        if (!g_cap.read(frame) || frame.empty()) {
+            return 0;
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_frameMutex);
+            g_frame = frame.clone();
+        }
+
+        // auto init with background subtraction if enabled and not tracking
+        if (g_autoMode && !g_tracking) {
+            cv::Mat fg;
+            // apply background subtractor (tune learning rate if needed)
+            g_backSub->apply(frame, fg, 0.01); // small learning rate to adapt slowly
+
+            // morphological cleanup: remove noise and fill holes
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+            cv::morphologyEx(fg, fg, cv::MORPH_OPEN, kernel, cv::Point(-1, -1), 1);
+            cv::morphologyEx(fg, fg, cv::MORPH_CLOSE, kernel, cv::Point(-1, -1), 2);
+            cv::medianBlur(fg, fg, 5);
+
+            // find contours
+            std::vector<std::vector<cv::Point>> contours;
+            cv::findContours(fg, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+            // candidate selection parameters (tune these for your scene)
+            double minArea = std::max(g_minContourArea, 500.0); // minimal moving area
+            double maxAreaRatio = 0.9; // ignore blobs covering almost whole frame
+            double minAspect = 1.0;    // height/width ratio lower bound for standing person
+            double maxAspect = 5.0;    // reasonable person aspect upper bound
+            double minSolidity = 0.4;  // area / convexHull area (people tend to have decent solidity)
+
+            cv::Rect bestRect;
+            double bestScore = 0.0;
+
+            // compute center preference (prefer blobs near previous track or center)
+            cv::Point2d prefCenter(frame.cols / 2.0, frame.rows / 2.0);
+            if (g_tracking && !g_bbox.empty()) prefCenter = cv::Point2d(g_bbox.x + g_bbox.width / 2.0, g_bbox.y + g_bbox.height / 2.0);
+
+            for (auto& c : contours) {
+                double area = cv::contourArea(c);
+                if (area < minArea) continue;
+
+                cv::Rect r = cv::boundingRect(c);
+                double areaRatio = area / (double)(frame.cols * frame.rows);
+                if (areaRatio > maxAreaRatio) continue;
+
+                double aspect = (r.height > 0) ? (double)r.height / (double)r.width : 0.0;
+                if (aspect < minAspect || aspect > maxAspect) continue;
+
+                // compute solidity
+                std::vector<cv::Point> hull;
+                cv::convexHull(c, hull);
+                double hullArea = cv::contourArea(hull);
+                double solidity = (hullArea > 1e-6) ? (area / hullArea) : 0.0;
+                if (solidity < minSolidity) continue;
+
+                // scoring: prefer larger area and closeness to preferred center
+                cv::Point2d cpos(r.x + r.width / 2.0, r.y + r.height / 2.0);
+                double dist = cv::norm(cpos - prefCenter);
+                // normalize dist by diag
+                double diag = std::sqrt(frame.cols * frame.cols + frame.rows * frame.rows);
+                double distScore = 1.0 - std::min(1.0, dist / diag);
+
+                // score = weighted combination
+                double score = 0.6 * (area / (double)(frame.cols * frame.rows)) + 0.4 * distScore;
+
+                // if you have HOG enabled later, you can boost score on HOG overlap
+                if (score > bestScore) { bestScore = score; bestRect = r; }
+            }
+
+            // optional HOG person detector check (only if you want extra validation)
+            // initialize once (outside this block ideally) to avoid cost each frame:
+            static cv::HOGDescriptor hog;
+            static bool hogInit = false;
+            if (!hogInit) {
+                hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
+                hogInit = true;
+            }
+            bool hogAccepted = false;
+            cv::Rect hogRect;
+            if (bestScore <= 0.0) {
+                // if no contour candidate, you can fallback to HOG-only detection
+                std::vector<cv::Rect> hogDet;
+                hog.detectMultiScale(frame, hogDet, 0, cv::Size(8, 8), cv::Size(32, 32), 1.05, 2);
+                if (!hogDet.empty()) {
+                    // pick largest HOG detection near center
+                    double bestA = 0.0;
+                    for (auto& hr : hogDet) {
+                        double a = hr.area();
+                        if (a > bestA) { bestA = a; hogRect = hr; }
+                    }
+                    if (bestA > 0) { hogAccepted = true; bestRect = hogRect; bestScore = 0.5; }
+                }
+            }
+            else {
+                // if we have a contour candidate, check overlap with HOG detection to boost confidence
+                std::vector<cv::Rect> hogDet;
+                hog.detectMultiScale(frame, hogDet, 0, cv::Size(8, 8), cv::Size(32, 32), 1.05, 2);
+                for (auto& hr : hogDet) {
+                    double iou = 0.0;
+                    cv::Rect inter = bestRect & hr;
+                    if (inter.area() > 0) {
+                        double uni = (double)(bestRect.area() + hr.area() - inter.area());
+                        iou = inter.area() / uni;
+                    }
+                    if (iou > 0.2) { bestScore += 0.3; break; } // boost if some overlap
+                }
+            }
+
+            // If we found a viable candidate, init tracker
+            if (bestScore > 0.0 && bestRect.area() > 0) {
+                cv::Rect2d r2d(bestRect.x, bestRect.y, bestRect.width, bestRect.height);
+                // clamp
+                r2d.x = std::max(0.0, r2d.x);
+                r2d.y = std::max(0.0, r2d.y);
+                r2d.width = std::min(r2d.width, (double)frame.cols - r2d.x);
+                r2d.height = std::min(r2d.height, (double)frame.rows - r2d.y);
+
+                auto t = makeTracker();
+                if (t) {
+                    bool initOk = false;
+                    try { initOk = true; t->init(frame, r2d); }
+                    catch (...) { initOk = false; }
+                    if (initOk) {
+                        g_tracker = t;
+                        g_bbox = r2d;
+                        g_tracking = true;
+                        log("Auto-init: tracker initialized (contour/HOG)");
+                    }
+                    else {
+                        t.release();
+                        log("Auto-init: tracker init failed");
+                    }
+                }
+            } // end auto-init
+        }
+
+
+
+        // update tracker if running
+        if (g_tracking && g_tracker) {
+            // call update using integer rect (matches your tracking.hpp)
+            cv::Rect bboxInt;
+            bool ok = false;
+            try {
+                ok = g_tracker->update(frame, bboxInt);
+            }
+            catch (...) {
+                ok = false;
+            }
+
+            if (!ok) {
+                // lost tracker
+                g_tracking = false;
+                g_tracker.release();
+                log("Tracker update failed -> released");
+            }
+            else {
+                // convert to double-precision internal bbox
+                cv::Rect2d newbbox((double)bboxInt.x, (double)bboxInt.y,
+                    (double)bboxInt.width, (double)bboxInt.height);
+
+                // clamp to image bounds
+                newbbox.x = std::max(0.0, newbbox.x);
+                newbbox.y = std::max(0.0, newbbox.y);
+                newbbox.width = std::max(0.0, std::min(newbbox.width, double(frame.cols) - newbbox.x));
+                newbbox.height = std::max(0.0, std::min(newbbox.height, double(frame.rows) - newbbox.y));
+
+                // sanity checks
+                double area = newbbox.width * newbbox.height;
+                double frameA = double(frame.cols) * double(frame.rows);
+                const double MAX_AREA_RATIO = 0.95;
+                const double MIN_AREA = 16.0;
+
+                if (newbbox.width <= 1.0 || newbbox.height <= 1.0 ||
+                    area < MIN_AREA || area > MAX_AREA_RATIO * frameA) {
+                    g_tracking = false;
+                    g_tracker.release();
+                    log("Tracker produced invalid bbox -> lost");
+                }
+                else {
+                    g_bbox = newbbox;
+                }
+            }
+        }
+
+        InvalidateRect(g_hwndMain ? g_hwndMain : hwnd, NULL, FALSE);
+        return 0;
     }
+    else if (wParam == ID_TIMER_SAVE && g_running && g_saveEnabled) {
+        // save current frame and cropped object if tracked
+        cv::Mat frameCopy;
+        {
+            std::lock_guard<std::mutex> lk(g_frameMutex);
+            if (g_frame.empty()) {
+                return 0;
+            }
+            frameCopy = g_frame.clone();
+        }
+
+        std::string base = g_outDir + "/" + timestampFilename();
+        std::string fullfn = base + ".jpg";
+        cv::imwrite(fullfn, frameCopy);
+        if (g_tracking && !g_bbox.empty()) {
+            cv::Rect ir((int)std::round(g_bbox.x), (int)std::round(g_bbox.y),
+                (int)std::round(g_bbox.width), (int)std::round(g_bbox.height));
+            ir &= cv::Rect(0, 0, frameCopy.cols, frameCopy.rows);
+            if (ir.width > 0 && ir.height > 0) {
+                cv::Mat crop = frameCopy(ir).clone();
+                std::string cropfn = base + "_crop.jpg";
+                cv::imwrite(cropfn, crop);
+            }
+        }
+
+        InvalidateRect(g_hwndMain ? g_hwndMain : hwnd, NULL, FALSE);
+        return 0;
+    }
+    break;
+}
     case WM_LBUTTONDOWN: {
         POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (p.x >= g_previewRect.left && p.x <= g_previewRect.right &&
