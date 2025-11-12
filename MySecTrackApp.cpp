@@ -25,10 +25,12 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/tracking.hpp>
 
+
 using namespace cv;
 using namespace std;
 namespace fs = std::filesystem;
 
+const int version = 0;
 const wchar_t CLASS_NAME[] = L"DSWinTrackClass";
 const int ID_BTN_OPEN = 201;
 const int ID_BTN_CLOSE = 202;
@@ -56,6 +58,16 @@ POINT g_mouseStart = { 0,0 };
 RECT g_previewRect = { 0,0,0,0 };
 
 // Helpers
+static void log(const char* s) {
+    CreateDirectoryW(L"C:\\Temp", NULL);
+    std::ofstream f("C:\\Temp\\tr_log.txt", std::ios::app);
+    if (f) {
+        SYSTEMTIME t; GetLocalTime(&t);
+        f << t.wYear << "-" << t.wMonth << "-" << t.wDay << " "
+            << t.wHour << ":" << t.wMinute << ":" << t.wSecond
+            << " pid=" << GetCurrentProcessId() << " : " << s << "\n";
+    }
+}
 std::string timestampFilename() {
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);

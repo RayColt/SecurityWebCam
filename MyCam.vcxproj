@@ -20,7 +20,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="MySecCamcppDEV.cpp" />
+    <ClCompile Include="MyCamTracker.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -112,7 +112,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\dev\vcpkg\installed\x64-windows\lib\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>C:\dev\vcpkg\installed\x64-windows\lib</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

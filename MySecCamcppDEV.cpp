@@ -2,10 +2,9 @@
 // Compile: g++ -std=c++17 auto_track_and_save.cpp `pkg-config --cflags --libs opencv4`
 // or use your Visual Studio/CMake + vcpkg OpenCV (with contrib for CSRT).
 
+#define WIN32_LEAN_AND_MEAN
 #include <opencv2/opencv.hpp>
-#ifdef HAVE_OPENCV_TRACKING
 #include <opencv2/tracking.hpp>
-#endif
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
@@ -181,8 +180,7 @@ int main(int argc, char** argv) {
         }
 
         // If tracking, update tracker and draw bbox
-        //cv::Rect2d bbox;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        cv::Rect bbox;
+        cv::Rect2d bbox;
         if (tracking && tracker) {
             bool ok = tracker->update(frame, bbox);
             if (!ok) {
