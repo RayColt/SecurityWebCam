@@ -48,6 +48,7 @@ mutex g_frameMutex;
 cv::Mat g_frame;
 cv::VideoCapture g_cap;
 string g_outDir = "captures";
+int TimeElapse = 760; // ms
 
 atomic<bool> g_autoMode{ false };
 atomic<bool> g_saveEnabled{ false };
@@ -276,7 +277,7 @@ void StartCamera(int sel)
     g_backSub = cv::createBackgroundSubtractorMOG2(500, 16, true);
     g_running = true;
     SetTimer(g_hwndMain, ID_TIMER_PREVIEW, 33, NULL); // ~30fps
-    if (g_saveEnabled) SetTimer(g_hwndMain, ID_TIMER_SAVE, 1000, NULL);
+    if (g_saveEnabled) SetTimer(g_hwndMain, ID_TIMER_SAVE, TimeElapse, NULL);
 }
 
 void StopCamera() 
@@ -335,7 +336,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 180, 10, 120, 18, hwnd, NULL, g_hInst, NULL);
            CreateWindowW(L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                 260, 8, 20, 20, hwnd, (HMENU)ID_CHECK_AUTO, g_hInst, NULL);
-           HWND hSaveCheck = CreateWindowW(L"STATIC", L"Save every second", WS_CHILD | WS_VISIBLE,
+		   wstring SaveText = L"Save every " + to_wstring(TimeElapse) + L" ms";
+           HWND hSaveCheck = CreateWindowW(L"STATIC", SaveText.c_str(), WS_CHILD | WS_VISIBLE,
                 320, 10, 170, 18, hwnd, NULL, g_hInst, NULL);
             CreateWindowW(L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                 455, 8, 20, 20, hwnd, (HMENU)ID_CHECK_SAVE, g_hInst, NULL);
