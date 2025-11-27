@@ -73,7 +73,8 @@ static void log(const char* s)
 {
     CreateDirectoryW(L"C:\\Temp", NULL);
     ofstream f("C:\\Temp\\Track_log.txt", ios::app);
-    if (f) {
+    if (f) 
+    {
         SYSTEMTIME t; GetLocalTime(&t);
         f << t.wYear << "-" << t.wMonth << "-" << t.wDay << " "
             << t.wHour << ":" << t.wMinute << ":" << t.wSecond
@@ -375,7 +376,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             else if (id == ID_CHECK_SAVE) 
             {
                 g_saveEnabled = (IsDlgButtonChecked(hwnd, ID_CHECK_SAVE) == BST_CHECKED);
-                if (g_running) {
+                if (g_running) 
+                {
                     if (g_saveEnabled) SetTimer(hwnd, ID_TIMER_SAVE, 1000, NULL);
                     else KillTimer(hwnd, ID_TIMER_SAVE);
                 }
@@ -521,13 +523,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                             bool initOk = false;
                             try { initOk = true; t->init(frame, r2d); }
                             catch (...) { initOk = false; }
-                            if (initOk) {
+                            if (initOk) 
+                            {
                                 g_tracker = t;
                                 g_bbox = r2d;
                                 g_tracking = true;
                                 log("Auto-init: tracker initialized (contour/HOG)");
                             }
-                            else {
+                            else 
+                            {
                                 t.release();
                                 log("Auto-init: tracker init failed");
                             }
@@ -627,7 +631,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         {
             POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             if (p.x >= g_previewRect.left && p.x <= g_previewRect.right &&
-                p.y >= g_previewRect.top && p.y <= g_previewRect.bottom) {
+                p.y >= g_previewRect.top && p.y <= g_previewRect.bottom) 
+            {
                 g_selecting = true;
                 g_mouseStart = p;
                 g_selectionRect = cv::Rect(p.x, p.y, 0, 0);
@@ -733,7 +738,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 
     // main message loop
     MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg, NULL, 0, 0)) 
+    {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
