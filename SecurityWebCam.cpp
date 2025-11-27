@@ -330,7 +330,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 10, 6, 70, 26, hwnd, (HMENU)ID_BTN_START, g_hInst, NULL);
            HWND hStopButton = CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                 90, 6, 70, 26, hwnd, (HMENU)ID_BTN_STOP, g_hInst, NULL);
-           HWND hTrackLabel = CreateWindowW(L"STATIC", L"Auto Tracer", WS_CHILD | WS_VISIBLE,
+           HWND hTrackLabel = CreateWindowW(L"STATIC", L"Auto Tracker", WS_CHILD | WS_VISIBLE,
                 180, 10, 120, 18, hwnd, NULL, g_hInst, NULL);
            CreateWindowW(L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
                 260, 8, 20, 20, hwnd, (HMENU)ID_CHECK_AUTO, g_hInst, NULL);
