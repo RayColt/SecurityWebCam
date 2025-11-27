@@ -1,4 +1,4 @@
-// main.cpp
+// SecurityWebCam.cpp
 // Win32 UI + OpenCV tracker + auto motion init + save per second
 // Build with >= C++17, link with OpenCV, user32, gdi32, ole32
 // Win32 + DirectShow enumeration (Unicode) + OpenCV capture (CAP_DSHOW) + TrackerCSRT
