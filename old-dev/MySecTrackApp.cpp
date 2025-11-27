@@ -57,7 +57,7 @@ std::atomic<bool> g_requestSelect{ false };
 POINT g_mouseStart = { 0,0 };
 RECT g_previewRect = { 0,0,0,0 };
 
-// Helpers
+/*/ Helpers
 static void log(const char* s) {
     CreateDirectoryW(L"C:\\Temp", NULL);
     std::ofstream f("C:\\Temp\\tr_log.txt", std::ios::app);
@@ -67,7 +67,7 @@ static void log(const char* s) {
             << t.wHour << ":" << t.wMinute << ":" << t.wSecond
             << " pid=" << GetCurrentProcessId() << " : " << s << "\n";
     }
-}
+}*/
 std::string timestampFilename() {
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);

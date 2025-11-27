@@ -300,7 +300,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     if (!RegisterClassW(&wc)) return 0;
 
     HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"MySecurityCam",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 900, 640,
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 900, 666,
         NULL, NULL, hInstance, NULL);
     if (!hwnd) return 0;
 

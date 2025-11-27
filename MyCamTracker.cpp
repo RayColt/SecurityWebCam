@@ -1,7 +1,11 @@
 // main.cpp
 // Win32 UI + OpenCV tracker + auto motion init + save per second
 // Build with C++17, link with OpenCV, user32, gdi32, ole32
-// If using vcpkg: configure CMake with toolchain file.
+// Win32 + DirectShow enumeration (Unicode) + OpenCV capture (CAP_DSHOW) + TrackerCSRT
+// Notes: Requires OpenCV contrib (tracking module) present in vcpkg opencv4 port.
+// .\vcpkg remove opencv4:x64-windows
+// .\vcpkg install opencv4[contrib]:x64-windows
+//
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -16,6 +20,7 @@
 #include <iomanip>
 #include <fstream>
 #include <dshow.h>
+
 #pragma comment(lib, "strmiids.lib")
 #pragma comment(lib, "ole32.lib")
 
@@ -31,16 +36,13 @@
 namespace fs = std::filesystem;
 
 static const wchar_t CLASS_NAME[] = L"AutoTrackWin";
-static const int ID_BTN_START = 101;
-static const int ID_BTN_STOP = 102;
-static const int ID_CHECK_AUTO = 201;
-static const int ID_CHECK_SAVE = 202;
-static const int ID_TIMER_PREVIEW = 301;
-static const int ID_TIMER_SAVE = 302;
+enum { ID_BTN_START = 101, ID_BTN_STOP = 102, ID_CHECK_AUTO = 201, ID_CHECK_SAVE = 202, ID_TIMER_PREVIEW = 301, ID_TIMER_SAVE = 302, ID_COMBO = 303 };
 
 HINSTANCE g_hInst = nullptr;
 HWND g_hwndMain = nullptr;
+HWND g_hCombo = nullptr;
 
+std::vector<std::wstring> g_devNames;
 std::atomic<bool> g_running{ false };
 std::mutex g_frameMutex;
 cv::Mat g_frame;
@@ -104,7 +106,54 @@ cv::Ptr<cv::Tracker> makeTracker() {
 #endif
 }
 
+// Enumerate video capture devices via DirectShow and return friendly names (Unicode)
+std::vector<std::wstring> EnumerateVideoDevices() {
+    std::vector<std::wstring> result;
+    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    bool coInit = SUCCEEDED(hr);
+    ICreateDevEnum* pDevEnum = nullptr;
+    IEnumMoniker* pEnum = nullptr;
 
+    hr = CoCreateInstance(CLSID_SystemDeviceEnum, NULL, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&pDevEnum));
+    if (FAILED(hr) || !pDevEnum) {
+        if (coInit) CoUninitialize();
+        return result;
+    }
+
+    hr = pDevEnum->CreateClassEnumerator(CLSID_VideoInputDeviceCategory, &pEnum, 0);
+    if (hr == S_OK && pEnum) {
+        IMoniker* pMoniker = nullptr;
+        while (pEnum->Next(1, &pMoniker, NULL) == S_OK) {
+            IPropertyBag* pPropBag = nullptr;
+            hr = pMoniker->BindToStorage(0, 0, IID_PPV_ARGS(&pPropBag));
+            if (SUCCEEDED(hr) && pPropBag) {
+                VARIANT varName;
+                VariantInit(&varName);
+                // "FriendlyName" property holds the display name (BSTR, can contain Chinese)
+                hr = pPropBag->Read(L"FriendlyName", &varName, 0);
+                if (SUCCEEDED(hr) && varName.vt == VT_BSTR) {
+                    // convert BSTR (wide) to std::wstring
+                    std::wstring name((wchar_t*)varName.bstrVal);
+                    result.push_back(name);
+                }
+                else {
+                    result.push_back(L"Unknown Device");
+                }
+                VariantClear(&varName);
+                pPropBag->Release();
+            }
+            else {
+                result.push_back(L"Unknown Device");
+            }
+            pMoniker->Release();
+        }
+        pEnum->Release();
+    }
+    pDevEnum->Release();
+    if (coInit) CoUninitialize();
+    return result;
+}
 
 HBITMAP MatToHBITMAP(const cv::Mat& mat) {
     if (mat.empty()) return nullptr;
@@ -134,23 +183,19 @@ HBITMAP MatToHBITMAP(const cv::Mat& mat) {
 void PaintPreview(HDC hdc) {
     RECT rc;
     GetClientRect(g_hwndMain, &rc);
-    const int topH = 40;
-    RECT previewRc = rc;
-    previewRc.top += topH;
-    g_previewRect = previewRc;
-    FillRect(hdc, &previewRc, (HBRUSH)(COLOR_WINDOW + 1));
-
+    rc.top = rc.top + 40;
+    rc.bottom = rc.bottom - 10;
+    g_previewRect = rc;
+    FillRect(hdc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
     cv::Mat frameCopy;
     {
         std::lock_guard<std::mutex> lk(g_frameMutex);
         if (g_frame.empty()) return;
         frameCopy = g_frame.clone();
     }
-
-    int pw = previewRc.right - previewRc.left;
-    int ph = previewRc.bottom - previewRc.top;
+    int pw = rc.right - rc.left;
+    int ph = rc.bottom - rc.top;
     if (pw <= 0 || ph <= 0) return;
-
     double fx = double(pw) / frameCopy.cols;
     double fy = double(ph) / frameCopy.rows;
     double f = std::min(fx, fy);
@@ -162,8 +207,8 @@ void PaintPreview(HDC hdc) {
     if (!hbm) return;
     HDC memDC = CreateCompatibleDC(hdc);
     HBITMAP old = (HBITMAP)SelectObject(memDC, hbm);
-    int x = previewRc.left + (pw - sw) / 2;
-    int y = previewRc.top + (ph - sh) / 2;
+    int x = rc.left + (pw - sw) / 2;
+    int y = rc.top + (ph - sh) / 2;
     BitBlt(hdc, x, y, sw, sh, memDC, 0, 0, SRCCOPY);
 
     // draw tracker bbox scaled
@@ -200,12 +245,12 @@ void PaintPreview(HDC hdc) {
     DeleteDC(memDC);
 }
 
-void StartCamera() {
+void StartCamera(int sel) {
     if (g_running) return;
     try { if (!fs::exists(g_outDir)) fs::create_directories(g_outDir); }
     catch (...) {}
     if (g_cap.isOpened()) g_cap.release();
-    g_cap.open(0, cv::CAP_DSHOW);
+    g_cap.open(sel, cv::CAP_DSHOW);
     if (!g_cap.isOpened()) {
         MessageBoxW(g_hwndMain, L"Failed to open camera.", L"Error", MB_ICONERROR);
         return;
@@ -257,23 +302,48 @@ cv::Rect2d ScreenToImageRect(const cv::Mat& frame, RECT previewRc, RECT sel) {
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE: {
-        CreateWindowW(L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        HFONT hFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+       HWND hStartButton = CreateWindowW(L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             10, 6, 70, 26, hwnd, (HMENU)ID_BTN_START, g_hInst, NULL);
-        CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+       HWND hStopButton = CreateWindowW(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             90, 6, 70, 26, hwnd, (HMENU)ID_BTN_STOP, g_hInst, NULL);
-        CreateWindowW(L"STATIC", L"Auto init", WS_CHILD | WS_VISIBLE,
-            180, 10, 60, 18, hwnd, NULL, g_hInst, NULL);
+       HWND hTrackLabel = CreateWindowW(L"STATIC", L"Auto Tracer", WS_CHILD | WS_VISIBLE,
+            180, 10, 120, 18, hwnd, NULL, g_hInst, NULL);
+       CreateWindowW(L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+            260, 8, 20, 20, hwnd, (HMENU)ID_CHECK_AUTO, g_hInst, NULL);
+       HWND hSaveCheck = CreateWindowW(L"STATIC", L"Save every second", WS_CHILD | WS_VISIBLE,
+            320, 10, 170, 18, hwnd, NULL, g_hInst, NULL);
         CreateWindowW(L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-            240, 8, 20, 20, hwnd, (HMENU)ID_CHECK_AUTO, g_hInst, NULL);
-        CreateWindowW(L"STATIC", L"Save every second", WS_CHILD | WS_VISIBLE,
-            280, 10, 120, 18, hwnd, NULL, g_hInst, NULL);
-        CreateWindowW(L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-            400, 8, 20, 20, hwnd, (HMENU)ID_CHECK_SAVE, g_hInst, NULL);
+            455, 8, 20, 20, hwnd, (HMENU)ID_CHECK_SAVE, g_hInst, NULL);
+
+       g_hCombo = CreateWindowW(L"COMBOBOX", NULL,
+            WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+            500, 10, 300, 200, hwnd, (HMENU)ID_COMBO, g_hInst, NULL);
+
+        SendMessageW(hStartButton, WM_SETFONT, (WPARAM)hFont, TRUE);
+        SendMessageW(hStopButton, WM_SETFONT, (WPARAM)hFont, TRUE);
+        SendMessageW(hTrackLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+        SendMessageW(hSaveCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+        SendMessageW(g_hCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        // enumerate devices and fill combo
+        g_devNames = EnumerateVideoDevices();
+        SendMessageW(g_hCombo, CB_RESETCONTENT, 0, 0);
+        for (size_t i = 0; i < g_devNames.size(); ++i) {
+            SendMessageW(g_hCombo, CB_ADDSTRING, 0, (LPARAM)g_devNames[i].c_str());
+        }
+        if (!g_devNames.empty()) SendMessageW(g_hCombo, CB_SETCURSEL, 0, 0);
         break;
     }
     case WM_COMMAND: {
         int id = LOWORD(wParam);
-        if (id == ID_BTN_START) StartCamera();
+        if (id == ID_BTN_START)
+        {
+            int sel = (int)SendMessageW(g_hCombo, CB_GETCURSEL, 0, 0);
+            StartCamera(sel);
+        }
         else if (id == ID_BTN_STOP) StopCamera();
         else if (id == ID_CHECK_AUTO) {
             g_autoMode = (IsDlgButtonChecked(hwnd, ID_CHECK_AUTO) == BST_CHECKED);
@@ -423,7 +493,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         break;
     }*/
 case WM_TIMER: {
-    if (wParam == ID_TIMER_PREVIEW && g_running) {
+    if (wParam == ID_TIMER_PREVIEW && g_running) 
+    {
         cv::Mat frame;
         if (!g_cap.read(frame) || frame.empty()) {
             return 0;
@@ -434,7 +505,8 @@ case WM_TIMER: {
         }
 
         // auto init with background subtraction if enabled and not tracking
-        if (g_autoMode && !g_tracking) {
+        if (g_autoMode && !g_tracking) 
+        {
             cv::Mat fg;
             // apply background subtractor (tune learning rate if needed)
             g_backSub->apply(frame, fg, 0.01); // small learning rate to adapt slowly
@@ -463,7 +535,8 @@ case WM_TIMER: {
             cv::Point2d prefCenter(frame.cols / 2.0, frame.rows / 2.0);
             if (g_tracking && !g_bbox.empty()) prefCenter = cv::Point2d(g_bbox.x + g_bbox.width / 2.0, g_bbox.y + g_bbox.height / 2.0);
 
-            for (auto& c : contours) {
+            for (auto& c : contours) 
+            {
                 double area = cv::contourArea(c);
                 if (area < minArea) continue;
 
@@ -499,13 +572,15 @@ case WM_TIMER: {
             // initialize once (outside this block ideally) to avoid cost each frame:
             static cv::HOGDescriptor hog;
             static bool hogInit = false;
-            if (!hogInit) {
+            if (!hogInit) 
+            {
                 hog.setSVMDetector(cv::HOGDescriptor::getDefaultPeopleDetector());
                 hogInit = true;
             }
             bool hogAccepted = false;
             cv::Rect hogRect;
-            if (bestScore <= 0.0) {
+            if (bestScore <= 0.0) 
+            {
                 // if no contour candidate, you can fallback to HOG-only detection
                 std::vector<cv::Rect> hogDet;
                 hog.detectMultiScale(frame, hogDet, 0, cv::Size(8, 8), cv::Size(32, 32), 1.05, 2);
@@ -519,7 +594,8 @@ case WM_TIMER: {
                     if (bestA > 0) { hogAccepted = true; bestRect = hogRect; bestScore = 0.5; }
                 }
             }
-            else {
+            else 
+            {
                 // if we have a contour candidate, check overlap with HOG detection to boost confidence
                 std::vector<cv::Rect> hogDet;
                 hog.detectMultiScale(frame, hogDet, 0, cv::Size(8, 8), cv::Size(32, 32), 1.05, 2);
@@ -533,7 +609,6 @@ case WM_TIMER: {
                     if (iou > 0.2) { bestScore += 0.3; break; } // boost if some overlap
                 }
             }
-
             // If we found a viable candidate, init tracker
             if (bestScore > 0.0 && bestRect.area() > 0) {
                 cv::Rect2d r2d(bestRect.x, bestRect.y, bestRect.width, bestRect.height);
@@ -561,28 +636,29 @@ case WM_TIMER: {
                 }
             } // end auto-init
         }
-
-
-
         // update tracker if running
-        if (g_tracking && g_tracker) {
+        if (g_tracking && g_tracker) 
+        {
             // call update using integer rect (matches your tracking.hpp)
             cv::Rect bboxInt;
             bool ok = false;
-            try {
+            try 
+            {
                 ok = g_tracker->update(frame, bboxInt);
             }
             catch (...) {
                 ok = false;
             }
 
-            if (!ok) {
+            if (!ok) 
+            {
                 // lost tracker
                 g_tracking = false;
                 g_tracker.release();
                 log("Tracker update failed -> released");
             }
-            else {
+            else 
+            {
                 // convert to double-precision internal bbox
                 cv::Rect2d newbbox((double)bboxInt.x, (double)bboxInt.y,
                     (double)bboxInt.width, (double)bboxInt.height);
@@ -600,7 +676,8 @@ case WM_TIMER: {
                 const double MIN_AREA = 16.0;
 
                 if (newbbox.width <= 1.0 || newbbox.height <= 1.0 ||
-                    area < MIN_AREA || area > MAX_AREA_RATIO * frameA) {
+                    area < MIN_AREA || area > MAX_AREA_RATIO * frameA) 
+                {
                     g_tracking = false;
                     g_tracker.release();
                     log("Tracker produced invalid bbox -> lost");
@@ -644,7 +721,8 @@ case WM_TIMER: {
     }
     break;
 }
-    case WM_LBUTTONDOWN: {
+    case WM_LBUTTONDOWN: 
+    {
         POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (p.x >= g_previewRect.left && p.x <= g_previewRect.right &&
             p.y >= g_previewRect.top && p.y <= g_previewRect.bottom) {
@@ -655,8 +733,10 @@ case WM_TIMER: {
         }
         break;
     }
-    case WM_MOUSEMOVE: {
-        if (g_selecting) {
+    case WM_MOUSEMOVE: 
+    {
+        if (g_selecting) 
+        {
             POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             int x = std::min(g_mouseStart.x, p.x);
             int y = std::min(g_mouseStart.y, p.y);
@@ -667,8 +747,10 @@ case WM_TIMER: {
         }
         break;
     }
-    case WM_LBUTTONUP: {
-        if (g_selecting) {
+    case WM_LBUTTONUP: 
+    {
+        if (g_selecting) 
+        {
             POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             RECT sel = { std::min(g_mouseStart.x, p.x), std::min(g_mouseStart.y, p.y),
                          std::max(g_mouseStart.x, p.x), std::max(g_mouseStart.y, p.y) };
@@ -682,7 +764,8 @@ case WM_TIMER: {
                 frameCopy = g_frame.clone();
             }
             cv::Rect2d r2d = ScreenToImageRect(frameCopy, g_previewRect, sel);
-            if (r2d.width > 5 && r2d.height > 5) {
+            if (r2d.width > 5 && r2d.height > 5) 
+            {
                 auto t = makeTracker();
                 if (!t) break;
                 // clamp
@@ -691,12 +774,14 @@ case WM_TIMER: {
                 r2d.height = std::min(r2d.height, double(frameCopy.rows) - r2d.y);
                 bool ok = true;//TODO check init return
                     t->init(frameCopy, r2d);
-                if (ok) {
+                if (ok) 
+                {
                     g_tracker = t;
                     g_bbox = r2d;
                     g_tracking = true;
                 }
-                else {
+                else 
+                {
                     t.release();
                 }
                 InvalidateRect(hwnd, NULL, FALSE);
@@ -734,8 +819,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     if (!RegisterClassW(&wc)) return 0;
 
-    HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"Auto Tracker (Win32 + OpenCV)",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 700,
+    HWND hwnd = CreateWindowExW(0, CLASS_NAME, L"Security Cam with Hotspot Selection",
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 666,
         NULL, NULL, hInstance, NULL);
     if (!hwnd) return 0;
     g_hwndMain = hwnd;
