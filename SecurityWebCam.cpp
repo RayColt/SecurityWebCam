@@ -32,8 +32,8 @@
 #define HAVE_OPENCV_TRACKING 0
 #endif
 
-
-namespace fs = std::filesystem;
+using namespace std;
+namespace fs = filesystem;
 
 static const wchar_t CLASS_NAME[] = L"AutoTrackWin";
 enum { ID_BTN_START = 101, ID_BTN_STOP = 102, ID_CHECK_AUTO = 201, ID_CHECK_SAVE = 202, ID_TIMER_PREVIEW = 301, ID_TIMER_SAVE = 302, ID_COMBO = 303 };
@@ -42,23 +42,23 @@ HINSTANCE g_hInst = nullptr;
 HWND g_hwndMain = nullptr;
 HWND g_hCombo = nullptr;
 
-std::vector<std::wstring> g_devNames;
-std::atomic<bool> g_running{ false };
-std::mutex g_frameMutex;
+vector<wstring> g_devNames;
+atomic<bool> g_running{ false };
+mutex g_frameMutex;
 cv::Mat g_frame;
 cv::VideoCapture g_cap;
-std::string g_outDir = "captures";
+string g_outDir = "captures";
 
-std::atomic<bool> g_autoMode{ false };
-std::atomic<bool> g_saveEnabled{ false };
+atomic<bool> g_autoMode{ false };
+atomic<bool> g_saveEnabled{ false };
 
 // Tracking
 cv::Ptr<cv::Tracker> g_tracker;
-std::atomic<bool> g_tracking{ false };
+atomic<bool> g_tracking{ false };
 cv::Rect2d g_bbox;
 
 // Mouse selection
-std::atomic<bool> g_selecting{ false };
+atomic<bool> g_selecting{ false };
 POINT g_mouseStart = { 0,0 };
 RECT g_previewRect = { 0,0,0,0 };
 cv::Rect g_selectionRect; // integer screen coords while dragging
@@ -71,7 +71,7 @@ double g_minContourArea = 500.0;
 // Logging helper
 static void log(const char* s) {
     CreateDirectoryW(L"C:\\Temp", NULL);
-    std::ofstream f("C:\\Temp\\Track_log.txt", std::ios::app);
+    ofstream f("C:\\Temp\\Track_log.txt", ios::app);
     if (f) {
         SYSTEMTIME t; GetLocalTime(&t);
         f << t.wYear << "-" << t.wMonth << "-" << t.wDay << " "
@@ -79,17 +79,17 @@ static void log(const char* s) {
             << " pid=" << GetCurrentProcessId() << " : " << s << "\n";
     }
 }
-std::string timestampFilename() {
-    auto now = std::chrono::system_clock::now();
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm;
+string timestampFilename() {
+    auto now = chrono::system_clock::now();
+    time_t t = chrono::system_clock::to_time_t(now);
+    tm tm;
 #if defined(_MSC_VER)
     localtime_s(&tm, &t);
 #else
     localtime_r(&t, &tm);
 #endif
-    std::ostringstream ss;
-    ss << std::put_time(&tm, "%Y%m%d_%H%M%S");
+    ostringstream ss;
+    ss << put_time(&tm, "%Y%m%d_%H%M%S");
     return ss.str();
 }
 
@@ -107,8 +107,8 @@ cv::Ptr<cv::Tracker> makeTracker() {
 }
 
 // Enumerate video capture devices via DirectShow and return friendly names (Unicode)
-std::vector<std::wstring> EnumerateVideoDevices() {
-    std::vector<std::wstring> result;
+vector<wstring> EnumerateVideoDevices() {
+    vector<wstring> result;
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     bool coInit = SUCCEEDED(hr);
     ICreateDevEnum* pDevEnum = nullptr;
@@ -133,8 +133,8 @@ std::vector<std::wstring> EnumerateVideoDevices() {
                 // "FriendlyName" property holds the display name (BSTR, can contain Chinese)
                 hr = pPropBag->Read(L"FriendlyName", &varName, 0);
                 if (SUCCEEDED(hr) && varName.vt == VT_BSTR) {
-                    // convert BSTR (wide) to std::wstring
-                    std::wstring name((wchar_t*)varName.bstrVal);
+                    // convert BSTR (wide) to wstring
+                    wstring name((wchar_t*)varName.bstrVal);
                     result.push_back(name);
                 }
                 else {
@@ -189,7 +189,7 @@ void PaintPreview(HDC hdc) {
     FillRect(hdc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
     cv::Mat frameCopy;
     {
-        std::lock_guard<std::mutex> lk(g_frameMutex);
+        lock_guard<mutex> lk(g_frameMutex);
         if (g_frame.empty()) return;
         frameCopy = g_frame.clone();
     }
@@ -198,7 +198,7 @@ void PaintPreview(HDC hdc) {
     if (pw <= 0 || ph <= 0) return;
     double fx = double(pw) / frameCopy.cols;
     double fy = double(ph) / frameCopy.rows;
-    double f = std::min(fx, fy);
+    double f = min(fx, fy);
     int sw = int(frameCopy.cols * f);
     int sh = int(frameCopy.rows * f);
     cv::Mat resized;
@@ -214,10 +214,10 @@ void PaintPreview(HDC hdc) {
     // draw tracker bbox scaled
     if (g_tracking && !g_bbox.empty()) {
         RECT r;
-        r.left = x + (LONG)std::round(g_bbox.x * f);
-        r.top = y + (LONG)std::round(g_bbox.y * f);
-        r.right = x + (LONG)std::round((g_bbox.x + g_bbox.width) * f);
-        r.bottom = y + (LONG)std::round((g_bbox.y + g_bbox.height) * f);
+        r.left = x + (LONG)round(g_bbox.x * f);
+        r.top = y + (LONG)round(g_bbox.y * f);
+        r.right = x + (LONG)round((g_bbox.x + g_bbox.width) * f);
+        r.bottom = y + (LONG)round((g_bbox.y + g_bbox.height) * f);
         HPEN pen = CreatePen(PS_SOLID, 2, RGB(0, 255, 0));
         HGDIOBJ oldPen = SelectObject(hdc, pen);
         HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -268,7 +268,7 @@ void StopCamera() {
     g_running = false;
     if (g_cap.isOpened()) g_cap.release();
     {
-        std::lock_guard<std::mutex> lk(g_frameMutex);
+        lock_guard<mutex> lk(g_frameMutex);
         g_frame.release();
     }
     g_tracking = false;
@@ -282,15 +282,15 @@ cv::Rect2d ScreenToImageRect(const cv::Mat& frame, RECT previewRc, RECT sel) {
     int ph = previewRc.bottom - previewRc.top;
     double fx = double(pw) / frame.cols;
     double fy = double(ph) / frame.rows;
-    double f = std::min(fx, fy);
+    double f = min(fx, fy);
     int sw = int(frame.cols * f);
     int sh = int(frame.rows * f);
     int x = previewRc.left + (pw - sw) / 2;
     int y = previewRc.top + (ph - sh) / 2;
-    int sx = std::fmax(sel.left, x);
-    int sy = std::fmax(sel.top, y);
-    int ex = std::fmin(sel.right, x + sw);
-    int ey = std::fmin(sel.bottom, y + sh);
+    int sx = fmax(sel.left, x);
+    int sy = fmax(sel.top, y);
+    int ex = fmin(sel.right, x + sw);
+    int ey = fmin(sel.bottom, y + sh);
     if (ex <= sx || ey <= sy) return cv::Rect2d();
     double rx = double(sx - x) / f;
     double ry = double(sy - y) / f;
@@ -362,7 +362,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             cv::Mat frame;
             if (!g_cap.read(frame) || frame.empty()) break;
             {
-                std::lock_guard<std::mutex> lk(g_frameMutex);
+                lock_guard<mutex> lk(g_frameMutex);
                 g_frame = frame.clone();
             }
 
@@ -372,7 +372,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 g_backSub->apply(frame, fg);
                 cv::erode(fg, fg, cv::Mat(), cv::Point(-1, -1), 1);
                 cv::dilate(fg, fg, cv::Mat(), cv::Point(-1, -1), 2);
-                std::vector<std::vector<cv::Point>> contours;
+                vector<vector<cv::Point>> contours;
                 cv::findContours(fg, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
                 double bestArea = 0; cv::Rect bestRect;
                 for (auto& c : contours) {
@@ -434,10 +434,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         (double)bboxInt.width, (double)bboxInt.height);
 
                     // 3) Clamp to image bounds
-                    newbbox.x = std::max(0.0, newbbox.x);
-                    newbbox.y = std::max(0.0, newbbox.y);
-                    newbbox.width = std::max(0.0, std::min(newbbox.width, double(frame.cols) - newbbox.x));
-                    newbbox.height = std::max(0.0, std::min(newbbox.height, double(frame.rows) - newbbox.y));
+                    newbbox.x = max(0.0, newbbox.x);
+                    newbbox.y = max(0.0, newbbox.y);
+                    newbbox.width = max(0.0, min(newbbox.width, double(frame.cols) - newbbox.x));
+                    newbbox.height = max(0.0, min(newbbox.height, double(frame.rows) - newbbox.y));
 
                     // 4) Sanity checks: reject tiny or ridiculously large boxes (tunable)
                     double area = newbbox.width * newbbox.height;
@@ -466,23 +466,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // save current frame and cropped object if tracked
             cv::Mat frameCopy;
             {
-                std::lock_guard<std::mutex> lk(g_frameMutex);
+                lock_guard<mutex> lk(g_frameMutex);
                 if (g_frame.empty())
                 {
 					break;// return 0 for exit wndproc
                 }
                 frameCopy = g_frame.clone();
             }
-            std::string base = g_outDir + "/" + timestampFilename();
-            std::string fullfn = base + ".jpg";
+            string base = g_outDir + "/" + timestampFilename();
+            string fullfn = base + ".jpg";
             cv::imwrite(fullfn, frameCopy);
             if (g_tracking && !g_bbox.empty()) {
-                cv::Rect ir((int)std::round(g_bbox.x), (int)std::round(g_bbox.y),
-                    (int)std::round(g_bbox.width), (int)std::round(g_bbox.height));
+                cv::Rect ir((int)round(g_bbox.x), (int)round(g_bbox.y),
+                    (int)round(g_bbox.width), (int)round(g_bbox.height));
                 ir &= cv::Rect(0, 0, frameCopy.cols, frameCopy.rows);
                 if (ir.width > 0 && ir.height > 0) {
                     cv::Mat crop = frameCopy(ir).clone();
-                    std::string cropfn = base + "_crop.jpg";
+                    string cropfn = base + "_crop.jpg";
                     cv::imwrite(cropfn, crop);
                 }
             }
@@ -500,7 +500,7 @@ case WM_TIMER: {
             return 0;
         }
         {
-            std::lock_guard<std::mutex> lk(g_frameMutex);
+            lock_guard<mutex> lk(g_frameMutex);
             g_frame = frame.clone();
         }
 
@@ -518,11 +518,11 @@ case WM_TIMER: {
             cv::medianBlur(fg, fg, 5);
 
             // find contours
-            std::vector<std::vector<cv::Point>> contours;
+            vector<vector<cv::Point>> contours;
             cv::findContours(fg, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
             // candidate selection parameters (tune these for your scene)
-            double minArea = std::max(g_minContourArea, 500.0); // minimal moving area
+            double minArea = max(g_minContourArea, 500.0); // minimal moving area
             double maxAreaRatio = 0.9; // ignore blobs covering almost whole frame
             double minAspect = 1.0;    // height/width ratio lower bound for standing person
             double maxAspect = 5.0;    // reasonable person aspect upper bound
@@ -548,7 +548,7 @@ case WM_TIMER: {
                 if (aspect < minAspect || aspect > maxAspect) continue;
 
                 // compute solidity
-                std::vector<cv::Point> hull;
+                vector<cv::Point> hull;
                 cv::convexHull(c, hull);
                 double hullArea = cv::contourArea(hull);
                 double solidity = (hullArea > 1e-6) ? (area / hullArea) : 0.0;
@@ -558,8 +558,8 @@ case WM_TIMER: {
                 cv::Point2d cpos(r.x + r.width / 2.0, r.y + r.height / 2.0);
                 double dist = cv::norm(cpos - prefCenter);
                 // normalize dist by diag
-                double diag = std::sqrt(frame.cols * frame.cols + frame.rows * frame.rows);
-                double distScore = 1.0 - std::min(1.0, dist / diag);
+                double diag = sqrt(frame.cols * frame.cols + frame.rows * frame.rows);
+                double distScore = 1.0 - min(1.0, dist / diag);
 
                 // score = weighted combination
                 double score = 0.6 * (area / (double)(frame.cols * frame.rows)) + 0.4 * distScore;
@@ -582,7 +582,7 @@ case WM_TIMER: {
             if (bestScore <= 0.0) 
             {
                 // if no contour candidate, you can fallback to HOG-only detection
-                std::vector<cv::Rect> hogDet;
+                vector<cv::Rect> hogDet;
                 hog.detectMultiScale(frame, hogDet, 0, cv::Size(8, 8), cv::Size(32, 32), 1.05, 2);
                 if (!hogDet.empty()) {
                     // pick largest HOG detection near center
@@ -597,7 +597,7 @@ case WM_TIMER: {
             else 
             {
                 // if we have a contour candidate, check overlap with HOG detection to boost confidence
-                std::vector<cv::Rect> hogDet;
+                vector<cv::Rect> hogDet;
                 hog.detectMultiScale(frame, hogDet, 0, cv::Size(8, 8), cv::Size(32, 32), 1.05, 2);
                 for (auto& hr : hogDet) {
                     double iou = 0.0;
@@ -613,10 +613,10 @@ case WM_TIMER: {
             if (bestScore > 0.0 && bestRect.area() > 0) {
                 cv::Rect2d r2d(bestRect.x, bestRect.y, bestRect.width, bestRect.height);
                 // clamp
-                r2d.x = std::max(0.0, r2d.x);
-                r2d.y = std::max(0.0, r2d.y);
-                r2d.width = std::min(r2d.width, (double)frame.cols - r2d.x);
-                r2d.height = std::min(r2d.height, (double)frame.rows - r2d.y);
+                r2d.x = max(0.0, r2d.x);
+                r2d.y = max(0.0, r2d.y);
+                r2d.width = min(r2d.width, (double)frame.cols - r2d.x);
+                r2d.height = min(r2d.height, (double)frame.rows - r2d.y);
 
                 auto t = makeTracker();
                 if (t) {
@@ -664,10 +664,10 @@ case WM_TIMER: {
                     (double)bboxInt.width, (double)bboxInt.height);
 
                 // clamp to image bounds
-                newbbox.x = std::max(0.0, newbbox.x);
-                newbbox.y = std::max(0.0, newbbox.y);
-                newbbox.width = std::max(0.0, std::min(newbbox.width, double(frame.cols) - newbbox.x));
-                newbbox.height = std::max(0.0, std::min(newbbox.height, double(frame.rows) - newbbox.y));
+                newbbox.x = max(0.0, newbbox.x);
+                newbbox.y = max(0.0, newbbox.y);
+                newbbox.width = max(0.0, min(newbbox.width, double(frame.cols) - newbbox.x));
+                newbbox.height = max(0.0, min(newbbox.height, double(frame.rows) - newbbox.y));
 
                 // sanity checks
                 double area = newbbox.width * newbbox.height;
@@ -695,23 +695,23 @@ case WM_TIMER: {
         // save current frame and cropped object if tracked
         cv::Mat frameCopy;
         {
-            std::lock_guard<std::mutex> lk(g_frameMutex);
+            lock_guard<mutex> lk(g_frameMutex);
             if (g_frame.empty()) {
                 return 0;
             }
             frameCopy = g_frame.clone();
         }
 
-        std::string base = g_outDir + "/" + timestampFilename();
-        std::string fullfn = base + ".jpg";
+        string base = g_outDir + "/" + timestampFilename();
+        string fullfn = base + ".jpg";
         cv::imwrite(fullfn, frameCopy);
         if (g_tracking && !g_bbox.empty()) {
-            cv::Rect ir((int)std::round(g_bbox.x), (int)std::round(g_bbox.y),
-                (int)std::round(g_bbox.width), (int)std::round(g_bbox.height));
+            cv::Rect ir((int)round(g_bbox.x), (int)round(g_bbox.y),
+                (int)round(g_bbox.width), (int)round(g_bbox.height));
             ir &= cv::Rect(0, 0, frameCopy.cols, frameCopy.rows);
             if (ir.width > 0 && ir.height > 0) {
                 cv::Mat crop = frameCopy(ir).clone();
-                std::string cropfn = base + "_crop.jpg";
+                string cropfn = base + "_crop.jpg";
                 cv::imwrite(cropfn, crop);
             }
         }
@@ -738,10 +738,10 @@ case WM_TIMER: {
         if (g_selecting) 
         {
             POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            int x = std::min(g_mouseStart.x, p.x);
-            int y = std::min(g_mouseStart.y, p.y);
-            int w = std::abs(p.x - g_mouseStart.x);
-            int h = std::abs(p.y - g_mouseStart.y);
+            int x = min(g_mouseStart.x, p.x);
+            int y = min(g_mouseStart.y, p.y);
+            int w = abs(p.x - g_mouseStart.x);
+            int h = abs(p.y - g_mouseStart.y);
             g_selectionRect = cv::Rect(x, y, w, h);
             InvalidateRect(hwnd, NULL, FALSE);
         }
@@ -752,14 +752,14 @@ case WM_TIMER: {
         if (g_selecting) 
         {
             POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            RECT sel = { std::min(g_mouseStart.x, p.x), std::min(g_mouseStart.y, p.y),
-                         std::max(g_mouseStart.x, p.x), std::max(g_mouseStart.y, p.y) };
+            RECT sel = { min(g_mouseStart.x, p.x), min(g_mouseStart.y, p.y),
+                         max(g_mouseStart.x, p.x), max(g_mouseStart.y, p.y) };
             ReleaseCapture();
             g_selecting = false;
             // convert to image coords and init tracker
             cv::Mat frameCopy;
             {
-                std::lock_guard<std::mutex> lk(g_frameMutex);
+                lock_guard<mutex> lk(g_frameMutex);
                 if (g_frame.empty()) break;
                 frameCopy = g_frame.clone();
             }
@@ -769,9 +769,9 @@ case WM_TIMER: {
                 auto t = makeTracker();
                 if (!t) break;
                 // clamp
-                r2d.x = std::max(0.0, r2d.x); r2d.y = std::max(0.0, r2d.y);
-                r2d.width = std::min(r2d.width, double(frameCopy.cols) - r2d.x);
-                r2d.height = std::min(r2d.height, double(frameCopy.rows) - r2d.y);
+                r2d.x = max(0.0, r2d.x); r2d.y = max(0.0, r2d.y);
+                r2d.width = min(r2d.width, double(frameCopy.cols) - r2d.x);
+                r2d.height = min(r2d.height, double(frameCopy.rows) - r2d.y);
                 bool ok = true;//TODO check init return
                     t->init(frameCopy, r2d);
                 if (ok) 
